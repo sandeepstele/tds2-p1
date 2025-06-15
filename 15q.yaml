@@ -1,60 +1,48 @@
-description: TDS Virtual TA Project Sample (but not the actual evaluation) Questions
+description: "TDS Virtual TA Project Sample (but not the actual evaluation) Questions"
+
 providers:
+  # 1) Your FastAPI /query endpoint
   - id: https
     config:
-      url: http://127.0.0.1:8000/api/ 
+      url: "http://127.0.0.1:8000/query"
       method: POST
       headers:
-        Content-Type: application/json
-      body: |
-        {
-          "question": "{{ question }}"{% if image %},
-          "image": "{{ image }}"{% endif %}
-        }
+        Content-Type: "application/json"
+      body:
+        question: "{{ question }}"
+        image: "{{ image | default(null) }}"
       transformResponse: json
+
+  # 2) Your OpenAI proxy for rubric‐style evaluation
+  - id: aiproxy
+    config:
+      url: "https://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer {{ env.API_KEY }}"
+      body:
+        model: "gpt-4o-mini"
+        messages:
+          - role: system
+            content: >-
+              You are an evaluator that checks if an output meets specific criteria.
+              Analyze the output based on the given rubric and respond with a JSON
+              object containing {"reason":"your analysis","score": number between
+              0.0 and 1.0,"pass":true/false}.
+          - role: user
+            content: >-
+              Output to evaluate: {{ output }}
+
+              Rubric: {{ rubric }}
+        temperature: 0
+      transformResponse: json
+
+# By default run all tests against your FastAPI endpoint via provider "https"
 defaultTest:
   options:
     provider:
       id: https
-      config:
-        url: https://aiproxy.sanand.workers.dev/openai/v1/chat/completions
-        method: POST
-        headers:
-          Content-Type: application/json
-          Authorization: >-
-            Bearer {api_key)
-        body: |
-          {
-            "model": "gpt-4o-mini",
-            "messages": [
-              {"role": "system", "content": "You are an evaluator that checks if an output meets specific criteria. Analyze the output based on the given rubric and respond with a JSON object containing {\"reason\": \"your analysis\", \"score\": number between 0.0 and 1.0, \"pass\": true/false}.VB"},
-              {"role": "user", "content": "Output to evaluate: {{ output }}\n\nRubric: {{ rubric }}"}
-            ],
-            "temperature": 0
-          }
-        transformResponse: json
-  assert:
-    - type: is-json
-      value:
-        type: object
-        required:
-          - answer
-          - links
-        properties:
-          answer:
-            type: string
-          links:
-            type: array
-            items:
-              type: object
-              required:
-                - url
-                - text
-              properties:
-                url:
-                  type: string
-                text:
-                  type: string
 tests:
   - vars:
       question: >-

@@ -10,3 +10,4 @@ venv/
 preprocess.py
 *.pyc
 .DS_Store
+node_modules

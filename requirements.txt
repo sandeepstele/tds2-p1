@@ -14,3 +14,15 @@ playwright
 python-multipart
 setuptools
 chromadb
+fastapi
+uvicorn
+python-dotenv
+aiohttp
+numpy
+pydantic
+beautifulsoup4
+html2text
+tqdm
+markdown
+python-multipart
+setuptools

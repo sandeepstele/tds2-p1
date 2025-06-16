@@ -26,3 +26,4 @@ tqdm
 markdown
 python-multipart
 setuptools
+faiss-cpu

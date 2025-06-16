@@ -1,3 +1,4 @@
+
 # app.py
 import os
 import json
@@ -23,12 +24,11 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DB_PATH = "knowledge_base.db"
-SIMILARITY_THRESHOLD = 0.28  # Lowered threshold for better recall
-MAX_RESULTS = 25  # Increased to get more context
+SIMILARITY_THRESHOLD = 0.50  # Lowered threshold for better recall
+MAX_RESULTS = 10  # Increased to get more context
 load_dotenv()
-MAX_CONTEXT_CHUNKS = 6  # Increased number of chunks per source
+MAX_CONTEXT_CHUNKS = 4  # Increased number of chunks per source
 API_KEY = os.getenv("API_KEY")  # Get API key from environment variable
-
 
 # Models
 class QueryRequest(BaseModel):

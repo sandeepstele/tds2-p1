@@ -26,11 +26,9 @@ logger.setLevel(logging.DEBUG)
 
 # Constants
 DB_PATH = "knowledge_base.db"
-SIMILARITY_THRESHOLD = 0.20  # Lowered threshold for better recall
+SIMILARITY_THRESHOLD = 0.28  # Lowered threshold for better recall
 MAX_RESULTS = 10  # Increased to get more context
 load_dotenv()
-logger.debug(f"Loaded API_KEY set: {bool(API_KEY)}")
-logger.debug(f"PINECONE_ENV: {PINECONE_ENV}, region: {region}, cloud: {cloud}")
 
 # Pinecone vector store setup
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
@@ -46,6 +44,8 @@ pc = Pinecone(api_key=PINECONE_API_KEY,
 index_client = pc.Index("rag-index")
 MAX_CONTEXT_CHUNKS = 4  # Increased number of chunks per source
 API_KEY = os.getenv("API_KEY")  # Get API key from environment variable
+logger.debug(f"Loaded API_KEY set: {bool(API_KEY)}")
+logger.debug(f"PINECONE_ENV: {PINECONE_ENV}, region: {region}, cloud: {cloud}")
 
 # Models
 class QueryRequest(BaseModel):
@@ -581,11 +581,11 @@ async def query_knowledge_base(request: QueryRequest):
                 
                 result["links"] = links
             
-            # Log the final result structure (without full content for brevity)
-            logger.info(f"Returning result: answer_length={len(result['answer'])}, num_links={len(result['links'])}")
+            # Log the final result structure (now wrapped in a data envelope)
+            logger.info(f"Returning result (data envelope): answer_length={len(result['answer'])}, num_links={len(result['links'])}")
             
-            # Return the response in the exact format required
-            return result
+            # Return the response wrapped in a data envelope
+            return {"data": result}
         except Exception as e:
             error_msg = f"Error processing query: {e}"
             logger.error(error_msg)

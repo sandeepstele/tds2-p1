@@ -202,7 +202,7 @@ async def get_embedding(text, max_retries=3):
 
 # Pinecone vector search for similar content
 async def find_similar_content(query_embedding, conn):
-    """Fetch top-K nearest vectors from Pinecone across both namespaces."""
+    """Fetch top-K nearest vectors from Pinecone across both namespaces. Also fetches content from SQLite."""
     logger.debug(f"Querying Pinecone with embedding of length {len(query_embedding)}")
     results = []
     try:
@@ -218,13 +218,23 @@ async def find_similar_content(query_embedding, conn):
                 if sim < SIMILARITY_THRESHOLD:
                     continue
                 md = match.metadata
+                # Fetch the original content from SQLite
+                table = "discourse_chunks" if namespace == "discourse" else "markdown_chunks"
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"SELECT content FROM {table} WHERE id = ?",
+                    (int(match.id),)
+                )
+                row = cursor.fetchone()
+                content = row["content"] if row else ""
                 results.append({
                     "source":       md.get("source"),
                     "id":           int(match.id),
                     "title":        md.get("title") or md.get("doc_title"),
                     "url":          md.get("url") or md.get("original_url"),
                     "chunk_index":  md.get("chunk_idx"),
-                    "similarity":   sim
+                    "similarity":   sim,
+                    "content":      content
                 })
         logger.debug(f"Found {len(results)} raw Pinecone matches")
         # Sort and limit
@@ -235,76 +245,76 @@ async def find_similar_content(query_embedding, conn):
         raise
 
 # Function to enrich content with adjacent chunks
-async def enrich_with_adjacent_chunks(conn, results):
-    try:
-        logger.info(f"Enriching {len(results)} results with adjacent chunks")
-        cursor = conn.cursor()
-        enriched_results = []
-        
-        for result in results:
-            enriched_result = result.copy()
-            additional_content = ""
-            
-            # Try to get adjacent chunks for context
-            if result["source"] == "discourse":
-                post_id = result["post_id"]
-                current_chunk_index = result["chunk_index"]
-                
-                # Try to get previous chunk
-                if current_chunk_index > 0:
-                    cursor.execute("""
-                    SELECT content FROM discourse_chunks 
-                    WHERE post_id = ? AND chunk_index = ?
-                    """, (post_id, current_chunk_index - 1))
-                    prev_chunk = cursor.fetchone()
-                    if prev_chunk:
-                        additional_content = prev_chunk["content"] + " "
-                
-                # Try to get next chunk
-                cursor.execute("""
-                SELECT content FROM discourse_chunks 
-                WHERE post_id = ? AND chunk_index = ?
-                """, (post_id, current_chunk_index + 1))
-                next_chunk = cursor.fetchone()
-                if next_chunk:
-                    additional_content += " " + next_chunk["content"]
-                
-            elif result["source"] == "markdown":
-                title = result["title"]
-                current_chunk_index = result["chunk_index"]
-                
-                # Try to get previous chunk
-                if current_chunk_index > 0:
-                    cursor.execute("""
-                    SELECT content FROM markdown_chunks 
-                    WHERE doc_title = ? AND chunk_index = ?
-                    """, (title, current_chunk_index - 1))
-                    prev_chunk = cursor.fetchone()
-                    if prev_chunk:
-                        additional_content = prev_chunk["content"] + " "
-                
-                # Try to get next chunk
-                cursor.execute("""
-                SELECT content FROM markdown_chunks 
-                WHERE doc_title = ? AND chunk_index = ?
-                """, (title, current_chunk_index + 1))
-                next_chunk = cursor.fetchone()
-                if next_chunk:
-                    additional_content += " " + next_chunk["content"]
-            
-            # Add the enriched content
-            if additional_content:
-                enriched_result["content"] = f"{result['content']} {additional_content}"
-            
-            enriched_results.append(enriched_result)
-        
-        logger.info(f"Successfully enriched {len(enriched_results)} results")
-        return enriched_results
-    except Exception as e:
-        error_msg = f"Error in enrich_with_adjacent_chunks: {e}"
-        logger.error(error_msg)
-        logger.error(traceback.format_exc())
-        raise
+# async def enrich_with_adjacent_chunks(conn, results):
+#     try:
+#         logger.info(f"Enriching {len(results)} results with adjacent chunks")
+#         cursor = conn.cursor()
+#         enriched_results = []
+#         
+#         for result in results:
+#             enriched_result = result.copy()
+#             additional_content = ""
+#             
+#             # Try to get adjacent chunks for context
+#             if result["source"] == "discourse":
+#                 post_id = result["post_id"]
+#                 current_chunk_index = result["chunk_index"]
+#                 
+#                 # Try to get previous chunk
+#                 if current_chunk_index > 0:
+#                     cursor.execute("""
+#                     SELECT content FROM discourse_chunks 
+#                     WHERE post_id = ? AND chunk_index = ?
+#                     """, (post_id, current_chunk_index - 1))
+#                     prev_chunk = cursor.fetchone()
+#                     if prev_chunk:
+#                         additional_content = prev_chunk["content"] + " "
+#                 
+#                 # Try to get next chunk
+#                 cursor.execute("""
+#                 SELECT content FROM discourse_chunks 
+#                 WHERE post_id = ? AND chunk_index = ?
+#                 """, (post_id, current_chunk_index + 1))
+#                 next_chunk = cursor.fetchone()
+#                 if next_chunk:
+#                     additional_content += " " + next_chunk["content"]
+#                 
+#             elif result["source"] == "markdown":
+#                 title = result["title"]
+#                 current_chunk_index = result["chunk_index"]
+#                 
+#                 # Try to get previous chunk
+#                 if current_chunk_index > 0:
+#                     cursor.execute("""
+#                     SELECT content FROM markdown_chunks 
+#                     WHERE doc_title = ? AND chunk_index = ?
+#                     """, (title, current_chunk_index - 1))
+#                     prev_chunk = cursor.fetchone()
+#                     if prev_chunk:
+#                         additional_content = prev_chunk["content"] + " "
+#                 
+#                 # Try to get next chunk
+#                 cursor.execute("""
+#                 SELECT content FROM markdown_chunks 
+#                 WHERE doc_title = ? AND chunk_index = ?
+#                 """, (title, current_chunk_index + 1))
+#                 next_chunk = cursor.fetchone()
+#                 if next_chunk:
+#                     additional_content += " " + next_chunk["content"]
+#             
+#             # Add the enriched content
+#             if additional_content:
+#                 enriched_result["content"] = f"{result['content']} {additional_content}"
+#             
+#             enriched_results.append(enriched_result)
+#         
+#         logger.info(f"Successfully enriched {len(enriched_results)} results")
+#         return enriched_results
+#     except Exception as e:
+#         error_msg = f"Error in enrich_with_adjacent_chunks: {e}"
+#         logger.error(error_msg)
+#         logger.error(traceback.format_exc())
+#         raise
 
 # Function to generate an answer using LLM with improved prompt
 async def generate_answer(question, relevant_results, max_retries=2):
@@ -553,9 +563,8 @@ async def query_knowledge_base(request: QueryRequest):
                     "links": []
                 }
             
-            # Enrich results with adjacent chunks for better context
-            logger.info("Enriching results with adjacent chunks")
-            enriched_results = await enrich_with_adjacent_chunks(conn, relevant_results)
+            # Skip enrichment; use results with fetched content
+            enriched_results = relevant_results
             
             # Generate answer
             logger.info("Generating answer")

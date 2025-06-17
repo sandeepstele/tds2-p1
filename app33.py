@@ -1,4 +1,3 @@
-
 # app.py
 import os
 import json
@@ -24,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DB_PATH = "knowledge_base.db"
-SIMILARITY_THRESHOLD = 0.20  # Lowered threshold for better recall
+SIMILARITY_THRESHOLD = 0.50  # Lowered threshold for better recall
 MAX_RESULTS = 10  # Increased to get more context
 load_dotenv()
 MAX_CONTEXT_CHUNKS = 4  # Increased number of chunks per source
@@ -596,7 +595,8 @@ def parse_llm_response(response):
             "links": []
         }
 
-@app.post("/query", response_model=QueryResponse)
+# Define API routes
+@app.post("/query")
 async def query_knowledge_base(request: QueryRequest):
     try:
         # Log the incoming request

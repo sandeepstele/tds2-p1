@@ -26,7 +26,7 @@ logger.setLevel(logging.DEBUG)
 
 # Constants
 DB_PATH = "knowledge_base.db"
-SIMILARITY_THRESHOLD = 0.28  # Lowered threshold for better recall
+SIMILARITY_THRESHOLD = 0.45  # Lowered threshold for better recall
 MAX_RESULTS = 10  # Increased to get more context
 load_dotenv()
 
@@ -594,7 +594,7 @@ async def query_knowledge_base(request: QueryRequest):
             logger.info(f"Returning result (data envelope): answer_length={len(result['answer'])}, num_links={len(result['links'])}")
             
             # Return the response wrapped in a data envelope
-            return {"data": result}
+            return result
         except Exception as e:
             error_msg = f"Error processing query: {e}"
             logger.error(error_msg)

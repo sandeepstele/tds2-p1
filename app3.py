@@ -17,35 +17,18 @@ from fastapi.responses import JSONResponse
 import uvicorn
 import traceback
 from dotenv import load_dotenv
-from pinecone import Pinecone, ServerlessSpec
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 # Constants
 DB_PATH = "knowledge_base.db"
-SIMILARITY_THRESHOLD = 0.28  # Lowered threshold for better recall
+SIMILARITY_THRESHOLD = 0.20  # Lowered threshold for better recall
 MAX_RESULTS = 10  # Increased to get more context
 load_dotenv()
-
-# Pinecone vector store setup
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_ENV      = os.getenv("PINECONE_ENV", "us-east-1")
-parts = PINECONE_ENV.split('-')
-if len(parts) == 2:
-    region, cloud = parts
-else:
-    region = PINECONE_ENV
-    cloud = "aws"
-pc = Pinecone(api_key=PINECONE_API_KEY,
-              spec=ServerlessSpec(cloud=cloud, region=region))
-index_client = pc.Index("rag-index")
 MAX_CONTEXT_CHUNKS = 4  # Increased number of chunks per source
 API_KEY = os.getenv("API_KEY")  # Get API key from environment variable
-logger.debug(f"Loaded API_KEY set: {bool(API_KEY)}")
-logger.debug(f"PINECONE_ENV: {PINECONE_ENV}, region: {region}, cloud: {cloud}")
 
 # Models
 class QueryRequest(BaseModel):
@@ -200,38 +183,137 @@ async def get_embedding(text, max_retries=3):
                 raise HTTPException(status_code=500, detail=error_msg)
             await asyncio.sleep(3 * retries)  # Wait before retry
 
-# Pinecone vector search for similar content
+# Function to find similar content in the database with improved logic
 async def find_similar_content(query_embedding, conn):
-    """Fetch top-K nearest vectors from Pinecone across both namespaces."""
-    logger.debug(f"Querying Pinecone with embedding of length {len(query_embedding)}")
-    results = []
     try:
-        for namespace in ["discourse", "markdown"]:
-            resp = index_client.query(
-                vector=query_embedding,
-                top_k=MAX_RESULTS,
-                namespace=namespace,
-                include_metadata=True
-            )
-            for match in resp.matches:
-                sim = match.score
-                if sim < SIMILARITY_THRESHOLD:
-                    continue
-                md = match.metadata
-                results.append({
-                    "source":       md.get("source"),
-                    "id":           int(match.id),
-                    "title":        md.get("title") or md.get("doc_title"),
-                    "url":          md.get("url") or md.get("original_url"),
-                    "chunk_index":  md.get("chunk_idx"),
-                    "similarity":   sim
-                })
-        logger.debug(f"Found {len(results)} raw Pinecone matches")
-        # Sort and limit
+        logger.info("Finding similar content in database")
+        cursor = conn.cursor()
+        results = []
+        
+        # Search discourse chunks
+        logger.info("Querying discourse chunks")
+        cursor.execute("""
+        SELECT id, post_id, topic_id, topic_title, post_number, author, created_at, 
+               likes, chunk_index, content, url, embedding 
+        FROM discourse_chunks 
+        WHERE embedding IS NOT NULL
+        """)
+        
+        discourse_chunks = cursor.fetchall()
+        logger.info(f"Processing {len(discourse_chunks)} discourse chunks")
+        processed_count = 0
+        
+        for chunk in discourse_chunks:
+            try:
+                embedding = json.loads(chunk["embedding"])
+                similarity = cosine_similarity(query_embedding, embedding)
+                
+                if similarity >= SIMILARITY_THRESHOLD:
+                    # Ensure URL is properly formatted
+                    url = chunk["url"]
+                    if not url.startswith("http"):
+                        # Fix missing protocol
+                        url = f"https://discourse.onlinedegree.iitm.ac.in/t/{url}"
+                    
+                    results.append({
+                        "source": "discourse",
+                        "id": chunk["id"],
+                        "post_id": chunk["post_id"],
+                        "topic_id": chunk["topic_id"],
+                        "title": chunk["topic_title"],
+                        "url": url,
+                        "content": chunk["content"],
+                        "author": chunk["author"],
+                        "created_at": chunk["created_at"],
+                        "chunk_index": chunk["chunk_index"],
+                        "similarity": float(similarity)
+                    })
+                
+                processed_count += 1
+                if processed_count % 1000 == 0:
+                    logger.info(f"Processed {processed_count}/{len(discourse_chunks)} discourse chunks")
+                    
+            except Exception as e:
+                logger.error(f"Error processing discourse chunk {chunk['id']}: {e}")
+        
+        # Search markdown chunks
+        logger.info("Querying markdown chunks")
+        cursor.execute("""
+        SELECT id, doc_title, original_url, downloaded_at, chunk_index, content, embedding 
+        FROM markdown_chunks 
+        WHERE embedding IS NOT NULL
+        """)
+        
+        markdown_chunks = cursor.fetchall()
+        logger.info(f"Processing {len(markdown_chunks)} markdown chunks")
+        processed_count = 0
+        
+        for chunk in markdown_chunks:
+            try:
+                embedding = json.loads(chunk["embedding"])
+                similarity = cosine_similarity(query_embedding, embedding)
+                
+                if similarity >= SIMILARITY_THRESHOLD:
+                    # Ensure URL is properly formatted
+                    url = chunk["original_url"]
+                    if not url or not url.startswith("http"):
+                        # Use a default URL if missing
+                        url = f"https://docs.onlinedegree.iitm.ac.in/{chunk['doc_title']}"
+                    
+                    results.append({
+                        "source": "markdown",
+                        "id": chunk["id"],
+                        "title": chunk["doc_title"],
+                        "url": url,
+                        "content": chunk["content"],
+                        "chunk_index": chunk["chunk_index"],
+                        "similarity": float(similarity)
+                    })
+                
+                processed_count += 1
+                if processed_count % 1000 == 0:
+                    logger.info(f"Processed {processed_count}/{len(markdown_chunks)} markdown chunks")
+                    
+            except Exception as e:
+                logger.error(f"Error processing markdown chunk {chunk['id']}: {e}")
+        
+        # Sort by similarity (descending)
         results.sort(key=lambda x: x["similarity"], reverse=True)
-        return results[:MAX_RESULTS]
+        logger.info(f"Found {len(results)} relevant results above threshold")
+        
+        # Group by source document and keep most relevant chunks
+        grouped_results = {}
+        
+        for result in results:
+            # Create a unique key for the document/post
+            if result["source"] == "discourse":
+                key = f"discourse_{result['post_id']}"
+            else:
+                key = f"markdown_{result['title']}"
+            
+            if key not in grouped_results:
+                grouped_results[key] = []
+            
+            grouped_results[key].append(result)
+        
+        # For each source, keep only the most relevant chunks
+        final_results = []
+        for key, chunks in grouped_results.items():
+            # Sort chunks by similarity
+            chunks.sort(key=lambda x: x["similarity"], reverse=True)
+            # Keep top chunks
+            final_results.extend(chunks[:MAX_CONTEXT_CHUNKS])
+        
+        # Sort again by similarity
+        final_results.sort(key=lambda x: x["similarity"], reverse=True)
+        
+        # Return top results, limited by MAX_RESULTS
+        logger.info(f"Returning {len(final_results[:MAX_RESULTS])} final results after grouping")
+        return final_results[:MAX_RESULTS]
     except Exception as e:
-        logger.debug(f"Exception in find_similar_content: {e}")
+        error_msg = f"Error in find_similar_content: {e}"
+        logger.error(error_msg)
+        logger.error(traceback.format_exc())
         raise
 
 # Function to enrich content with adjacent chunks
@@ -342,7 +424,7 @@ async def generate_answer(question, relevant_results, max_retries=2):
             
             Make sure the URLs are copied exactly from the context without any changes.
             """
-            logger.debug(f"LLM prompt length: {len(prompt)} characters")
+            
             logger.info("Sending request to LLM API")
             # Call OpenAI API through aipipe proxy
             url = "https://aipipe.org/openai/v1/chat/completions"
@@ -379,7 +461,6 @@ async def generate_answer(question, relevant_results, max_retries=2):
             error_msg = f"Exception generating answer: {e}"
             logger.error(error_msg)
             logger.error(traceback.format_exc())
-            logger.debug(f"Exception object in generate_answer: {e}")
             retries += 1
             if retries >= max_retries:
                 raise HTTPException(status_code=500, detail=error_msg)
@@ -444,7 +525,6 @@ async def process_multimodal_query(question, image_base64):
     except Exception as e:
         logger.error(f"Exception processing multimodal query: {e}")
         logger.error(traceback.format_exc())
-        logger.debug(f"Exception object in process_multimodal_query: {e}")
         # Fall back to text-only query
         logger.info("Falling back to text-only query due to exception")
         return await get_embedding(question)
@@ -522,7 +602,6 @@ async def query_knowledge_base(request: QueryRequest):
     try:
         # Log the incoming request
         logger.info(f"Received query request: question='{request.question[:50]}...', image_provided={request.image is not None}")
-        logger.debug(f"Full request payload: question='{request.question}', image_present={request.image is not None}")
         
         if not API_KEY:
             error_msg = "API_KEY environment variable not set"
@@ -581,16 +660,15 @@ async def query_knowledge_base(request: QueryRequest):
                 
                 result["links"] = links
             
-            # Log the final result structure (now wrapped in a data envelope)
-            logger.info(f"Returning result (data envelope): answer_length={len(result['answer'])}, num_links={len(result['links'])}")
+            # Log the final result structure (without full content for brevity)
+            logger.info(f"Returning result: answer_length={len(result['answer'])}, num_links={len(result['links'])}")
             
-            # Return the response wrapped in a data envelope
-            return {"data": result}
+            # Return the response in the exact format required
+            return result
         except Exception as e:
             error_msg = f"Error processing query: {e}"
             logger.error(error_msg)
             logger.error(traceback.format_exc())
-            logger.debug(f"Exception object in query_knowledge_base: {e}")
             return JSONResponse(
                 status_code=500,
                 content={"error": error_msg}
@@ -602,7 +680,6 @@ async def query_knowledge_base(request: QueryRequest):
         error_msg = f"Unhandled exception in query_knowledge_base: {e}"
         logger.error(error_msg)
         logger.error(traceback.format_exc())
-        logger.debug(f"Exception object in query_knowledge_base (outer): {e}")
         return JSONResponse(
             status_code=500,
             content={"error": error_msg}

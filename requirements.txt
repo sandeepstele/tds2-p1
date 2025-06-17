@@ -27,3 +27,5 @@ markdown
 python-multipart
 setuptools
 faiss-cpu
+pinecone>=2.3.0
+grpcio
